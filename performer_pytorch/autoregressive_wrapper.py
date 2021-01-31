@@ -26,16 +26,13 @@ def top_k(logits, thres = 0.9):
     return probs
 
 class AutoregressiveWrapper(nn.Module):
-    def __init__(self, net, ignore_index = 0, pad_value = 0):
+    def __init__(self, net):
         super().__init__()
-        self.pad_value = pad_value
-        self.ignore_index = ignore_index
-
         self.net = net
         self.max_seq_len = net.max_seq_len
 
     @torch.no_grad()
-    def generate(self, start_tokens, seq_len, eos_token = None, temperature = 1., filter_logits_fn = top_k, filter_thres = 0.9, **kwargs):
+    def generate(self, start_tokens, seq_len, return_also_encodings = False, eos_token = None, temperature = 1., filter_logits_fn = top_k, filter_thres = 0.9, **kwargs):
         was_training = self.net.training
         num_dims = len(start_tokens.shape)
 
@@ -51,19 +48,23 @@ class AutoregressiveWrapper(nn.Module):
         if input_mask is None:
             input_mask = torch.full_like(out, True, dtype=torch.bool, device=out.device)
         
-        # in case of conditional generation, if enc_mask is not provided use the correct context_mask
-        context_mask = kwargs.pop('context_mask', None)
+        # # in case of conditional generation, if enc_mask is not provided use the correct context_mask
+        # context_mask = kwargs.pop('context_mask', None)
 
-        if 'context' in kwargs and not exists(context_mask):
-            context = kwargs['context']
-            context_mask = torch.full(context.shape[:2], True, dtype=torch.bool, device=out.device)
+        # if 'context' in kwargs and not exists(context_mask):
+        #     context = kwargs['context']
+        #     context_mask = torch.full(context.shape[:2], True, dtype=torch.bool, device=out.device)
 
-        kwargs.update(context_mask = context_mask)
+        # kwargs.update(context_mask = context_mask)
 
         for _ in range(seq_len):
             x = out[:, -self.max_seq_len:]
             input_mask = input_mask[:, -self.max_seq_len:]
-            logits = self.net(x, mask=input_mask, **kwargs)[:, -1, :]
+            if return_also_encodings:
+                encodings, logits_sequence = self.net(x, mask=input_mask, return_both = True, **kwargs)
+                logits = logits_sequence[:, -1, :]
+            else:
+                logits = self.net(x, mask=input_mask, **kwargs)[:, -1, :]
             filtered_logits = filter_logits_fn(logits, thres = filter_thres)
             probs = F.softmax(filtered_logits / temperature, dim=-1)
             sample = torch.multinomial(probs, 1)
@@ -80,9 +81,13 @@ class AutoregressiveWrapper(nn.Module):
             out = out.squeeze(0)
 
         self.net.train(was_training)
-        return out
+        
+        if return_also_encodings:
+            return encodings, out
+        else:
+            return out
 
-    def forward(self, x, **kwargs):
+    def forward(self, x, return_also_encodings = False, **kwargs):
         xi = x[:, :-1]
         xo = x[:, 1:]
 
@@ -93,7 +98,11 @@ class AutoregressiveWrapper(nn.Module):
             mask = mask[:, :-1]
         kwargs.update(mask = mask)
 
-        out = self.net(xi, **kwargs)
-
-        loss = F.cross_entropy(out.transpose(1, 2), xo, ignore_index = self.ignore_index)
-        return loss
+        if return_also_encodings:
+            encodings, out = self.net(xi, return_both = True, **kwargs)
+            loss = F.cross_entropy(out.transpose(1, 2), xo)
+            return encodings, loss
+        else:
+            out = self.net(xi, **kwargs)
+            loss = F.cross_entropy(out.transpose(1, 2), xo)
+            return loss
