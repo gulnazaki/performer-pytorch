@@ -386,23 +386,46 @@ class Performer(nn.Module):
             wrapper_fn = partial(PreLayerNorm, dim)
 
         for _, local_heads in zip(range(depth), local_attn_heads):
-            modules = []    
-            modules.append(wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)))
-            
-            if cross_attend:
-                modules.append(wrapper_fn(SelfAttention(dim, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)))
-            if second_cross_attend:
-                modules.append(wrapper_fn(SelfAttention(dim, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)))
-            
-            modules.append(wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1)))
-            
-            layers.append(nn.ModuleList(modules))
+            if reversible:
+                layers.append(nn.ModuleList([
+                    wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)),
+                    wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
+                ]))
+
+                if cross_attend:
+                    layers.append(nn.ModuleList([
+                        wrapper_fn(SelfAttention(dim, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)),
+                        wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
+                    ]))
+
+                if second_cross_attend:
+                    layers.append(nn.ModuleList([
+                        wrapper_fn(SelfAttention(dim, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)),
+                        wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
+                    ]))
+            else:
+                modules = []    
+
+                modules.append(wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)))
+                if cross_attend:
+                    modules.append(wrapper_fn(SelfAttention(dim, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)))
+                if second_cross_attend:
+                    modules.append(wrapper_fn(SelfAttention(dim, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)))
+                modules.append(wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1)))                
+
+                layers.append(nn.ModuleList(modules))
 
         execute_type = ReversibleSequence if reversible else SequentialSequence
 
-        route_attn = (((True, True, True, False),) if second_cross_attend else ((True, True, False),) if cross_attend else ((True, False),)) * depth
-        route_context = (((False, True, False, False),) if second_cross_attend else ((False, True, False),)) * depth
-        route_second_context = ((False, False, True, False),) * depth
+        if reversible:
+            route_attn = ((True, False),) * depth * ((2 if cross_attend else 1) + int(second_cross_attend))
+            route_context = ((False, False), (True, False), (False, False)) * depth if second_cross_attend else ((False, False), (True, False)) * depth
+            route_second_context = ((False, False), (False, False), (True, False)) * depth
+        else:
+            route_attn = (((True, True, True, False),) if second_cross_attend else ((True, True, False),) if cross_attend else ((True, False),)) * depth
+            route_context = (((False, True, False, False),) if second_cross_attend else ((False, True, False),)) * depth
+            route_second_context = ((False, False, True, False),) * depth
+        
         attn_route_map = {'mask': route_attn}
         context_route_map = {'context': route_context, 'context_mask': route_context} if cross_attend else {}
         second_context_route_map = {'second_context': route_second_context, 'second_context_mask': route_second_context} if second_cross_attend else {}
