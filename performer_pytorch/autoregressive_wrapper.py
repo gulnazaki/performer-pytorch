@@ -25,6 +25,11 @@ def top_k(logits, thres = 0.9):
     probs.scatter_(1, ind, val)
     return probs
 
+def constrain(constrain_fn, logits, previous_sample):
+    valid_ids = constrain_fn(previous_sample)
+    probs = torch.full_like(logits, float('-inf'))
+    return probs.scatter(1, valid_ids, logits)
+
 class AutoregressiveWrapper(nn.Module):
     def __init__(self, net):
         super().__init__()
@@ -32,7 +37,7 @@ class AutoregressiveWrapper(nn.Module):
         self.max_seq_len = net.max_seq_len
 
     @torch.no_grad()
-    def generate(self, start_tokens, seq_len, return_also_encodings = False, eos_token = None, temperature = 1., filter_logits_fn = top_k, filter_thres = 0.9, **kwargs):
+    def generate(self, start_tokens, seq_len, return_also_encodings = False, constrain_fn = None, eos_token = None, temperature = 1., filter_logits_fn = top_p, filter_thres = 0.95, **kwargs):
         was_training = self.net.training
         num_dims = len(start_tokens.shape)
 
@@ -57,6 +62,8 @@ class AutoregressiveWrapper(nn.Module):
 
         # kwargs.update(context_mask = context_mask)
 
+        sample = torch.full((b, 1), -1)
+
         for _ in range(seq_len):
             x = out[:, -self.max_seq_len:]
             input_mask = input_mask[:, -self.max_seq_len:]
@@ -65,6 +72,8 @@ class AutoregressiveWrapper(nn.Module):
                 logits = logits_sequence[:, -1, :]
             else:
                 logits = self.net(x, mask=input_mask, **kwargs)[:, -1, :]
+            if constrain_fn:
+                logits = constrain(constrain_fn, logits, sample)
             filtered_logits = filter_logits_fn(logits, thres = filter_thres)
             probs = F.softmax(filtered_logits / temperature, dim=-1)
             sample = torch.multinomial(probs, 1)
