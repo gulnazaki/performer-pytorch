@@ -37,7 +37,7 @@ class AutoregressiveWrapper(nn.Module):
         self.max_seq_len = net.max_seq_len
 
     @torch.no_grad()
-    def generate(self, start_tokens, seq_len, return_also_encodings = False, constrain_fn = None, eos_token = None, temperature = 1., filter_logits_fn = top_p, filter_thres = 0.95, **kwargs):
+    def generate(self, start_tokens, seq_len, return_also_encodings = False, constrain_fn = None, eos_token = None, temperature = 1., filter_logits_fn = top_k, filter_thres = 0.9, **kwargs):
         was_training = self.net.training
         num_dims = len(start_tokens.shape)
 
