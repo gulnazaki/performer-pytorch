@@ -27,8 +27,9 @@ def top_k(logits, thres = 0.9):
 
 def constrain(constrain_fn, logits, previous_sample):
     valid_ids = constrain_fn(previous_sample)
+    valid_logits = logits.gather(1, valid_ids)
     probs = torch.full_like(logits, float('-inf'))
-    return probs.scatter(1, valid_ids, logits)
+    return probs.scatter(1, valid_ids, valid_logits)
 
 class AutoregressiveWrapper(nn.Module):
     def __init__(self, net):
