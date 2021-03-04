@@ -74,9 +74,13 @@ class AutoregressiveWrapper(nn.Module):
                 logits = self.net(x, mask=input_mask, **kwargs)[:, -1, :]
             if constrain_fn:
                 logits = constrain(constrain_fn, logits, sample)
-            filtered_logits = filter_logits_fn(logits, thres = filter_thres)
-            probs = F.softmax(filtered_logits / temperature, dim=-1)
-            sample = torch.multinomial(probs, 1)
+            noninf = torch.nonzero(logits[0].isfinite())
+            if logits.size(0) == 1 and len(noninf) == 1:
+                sample = noninf
+            else:
+                filtered_logits = filter_logits_fn(logits, thres = filter_thres)
+                probs = F.softmax(filtered_logits / temperature, dim=-1)
+                sample = torch.multinomial(probs, 1)
 
             out = torch.cat((out, sample), dim=-1)
             input_mask = F.pad(input_mask, (0, 1), value=True)
